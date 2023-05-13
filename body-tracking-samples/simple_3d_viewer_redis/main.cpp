@@ -63,11 +63,10 @@ Visualization::Layout3d s_layoutMode = Visualization::Layout3d::OnlyMainView;
 bool s_visualizeJointFrame = false;
 
 // Setup redis 
+#include "redis_keys.h"
 RedisClient redis_client;
-const std::string torso_pos_key = "kinect::torso::position";
-const std::string torso_ori_key = "kinect::torso::orientation";
-const std::string right_palm_pos_key = "kinect::right_palm::position";
-const std::string right_palm_ori_key = "kinect::right_palm::orientation";
+std::vector<Eigen::Vector3d> body_pos (kinect_pos_keys.size(), Eigen::Vector3d::Zero());
+std::vector<Eigen::Matrix3d> body_ori (kinect_ori_keys.size(), Eigen::Matrix3d::Identity());
 
 int64_t ProcessKey(void* /*context*/, int key)
 {
@@ -425,28 +424,11 @@ void PlayFromDevice(InputSettings inputSettings)
             // Joint information (pos [mm]/ori): https://microsoft.github.io/Azure-Kinect-Body-Tracking/release/1.x.x/structk4abt__joint__t.html
             // Coordinate system reference: https://learn.microsoft.com/en-us/azure/kinect-dk/coordinate-systems
 
-            Eigen::Vector3d spine_navel_position = Eigen::Vector3d(skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].position.v[0],
-                                                                        skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].position.v[1],
-                                                                        skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].position.v[2]);  // (0, 0, 0) if not detected
-
-            Eigen::Matrix3d spine_navel_orientation = Eigen::Quaterniond(skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].orientation.v[0],
-                                                                            skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].orientation.v[1],
-                                                                            skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].orientation.v[2],
-                                                                            skeleton.joints[K4ABT_JOINT_SPINE_NAVEL].orientation.v[3]).toRotationMatrix();  // (w, x, y, z)
-
-            Eigen::Vector3d right_palm_position = Eigen::Vector3d(skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].position.v[0],
-                                                                        skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].position.v[1],
-                                                                        skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].position.v[2]);  // (0, 0, 0) if not detected
-
-            Eigen::Matrix3d right_palm_orientation = Eigen::Quaterniond(skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].orientation.v[0],
-                                                                            skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].orientation.v[1],
-                                                                            skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].orientation.v[2],
-                                                                            skeleton.joints[K4ABT_JOINT_WRIST_RIGHT].orientation.v[3]).toRotationMatrix();  // (w, x, y, z)
-
-            redis_client.setEigenMatrixJSON(torso_pos_key, spine_navel_position);
-            redis_client.setEigenMatrixJSON(torso_ori_key, spine_navel_orientation);
-            redis_client.setEigenMatrixJSON(right_palm_pos_key, right_palm_position);
-            redis_client.setEigenMatrixJSON(right_palm_ori_key, right_palm_orientation);
+            for (int i = 0; i < kinect_pos_keys.size(); ++i) {
+                body_pos[i] = Eigen::Vector3d(skeleton.joints[i].position.v[0], skeleton.joints[i].position.v[1], skeleton.joints[i].position.v[2]);
+                body_ori[i] = Eigen::Quaterniond(skeleton.joints[i].orientation.v[0], skeleton.joints[i].orientation.v[1], skeleton.joints[i].orientation.v[2], skeleton.joints[i].orientation.v[3]).toRotationMatrix();
+            }
+            redis_client.executeWriteCallback(0);
 
             // Release the bodyFrame
             k4abt_frame_release(bodyFrame);
@@ -480,6 +462,10 @@ int main(int argc, char** argv)
 
     // Connect to redis server
     redis_client.connect();
+    for (int i = 0; i < kinect_pos_keys.size(); ++i) {
+        redis_client.addEigenToWriteCallback(0, kinect_pos_keys[i], body_pos[i]);
+        redis_client.addEigenToWriteCallback(0, kinect_ori_keys[i], body_ori[i]);
+    }
 
     // Either play the offline file or play from the device
     if (inputSettings.Offline == true)
